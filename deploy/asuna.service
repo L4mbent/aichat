@@ -1,0 +1,27 @@
+[Unit]
+Description=Asuna AI Agent - Yuuki Asuna WeChat Bot (iLink)
+After=network.target
+
+[Service]
+Type=simple
+User=asuna
+Group=asuna
+WorkingDirectory=/opt/asuna
+Environment="PATH=/opt/asuna/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/opt/asuna/.env
+ExecStart=/opt/asuna/venv/bin/python run.py serve
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=asuna-agent
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/asuna/data
+
+[Install]
+WantedBy=multi-user.target

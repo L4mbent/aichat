@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python *)",
+      "Bash(/c/Users/L4mbentL/AppData/Local/Microsoft/WindowsApps/python --version)",
+      "Bash(/c/Windows/py --version)",
+      "Bash(/c/ProgramData/chocolatey/bin/python --version)",
+      "Read(//c/Users/L4mbentL/AppData/Local/Programs/**)",
+      "Bash(winget --version)",
+      "Bash(choco --version)",
+      "Bash(scoop --version)",
+      "Bash(pip --version)",
+      "Bash(pip3 --version)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Read(//c//**)",
+      "Bash(find /c -name \"python.exe\" -type f)",
+      "Bash(curl -s https://www.python.org/ftp/python/3.12.8/ -o /dev/null)",
+      "Bash(curl -o \"/c/Users/L4mbentL/Downloads/python-3.12.8-amd64.exe\" \"https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe\" --location --progress-bar)",
+      "mcp__Claude_Preview__preview_start",
+      "mcp__Claude_Preview__preview_screenshot",
+      "Bash(ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 root@39.96.198.100 \"curl -L -o /tmp/Miniconda3-latest-Linux-x86_64.sh https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh 2>&1 | tail -3\")",
+      "WebFetch(domain:github.com)",
+      "Bash(cat /tmp/openclaw-weixin-src/package/src/auth/accounts.ts)",
+      "Read(//tmp/openclaw-weixin-src/package/src/auth/**)",
+      "Bash(cat /tmp/openclaw-weixin-src/package/src/channel.ts)",
+      "Read(//tmp/openclaw-weixin-src/package/src/**)"
+    ]
+  }
+}
