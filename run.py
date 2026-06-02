@@ -60,7 +60,7 @@ async def cmd_serve() -> None:
     from asuna.ilink.api import send_message
     from asuna.ilink.monitor import run_monitor
     from asuna.ilink.state import load_account
-    from asuna.llm.client import get_ai_response
+    from asuna.llm.client import get_ai_response, extract_memories
     from asuna.middleware.rate_limit import RateLimiter
 
     print_banner()
@@ -108,17 +108,19 @@ async def cmd_serve() -> None:
         await mgr.get_or_create_user(user_id)
         history = await mgr.get_history(user_id)
         memory = await mgr.get_memory(user_id)
-        memory_text = mgr.build_memory_injection(memory)
 
-        reply = await get_ai_response(content, history)
-
-        if memory_text:
-            full_reply = memory_text + reply
-        else:
-            full_reply = reply
+        reply = await get_ai_response(content, history, memory)
 
         await mgr.save_turn(user_id, content, reply)
-        await send_message(base_url, token, user_id, full_reply, context_token)
+        await send_message(base_url, token, user_id, reply, context_token)
+
+        # Extract new memories from this conversation turn
+        try:
+            new_facts = await extract_memories(memory, content, reply)
+            for fact in new_facts:
+                await mgr.set_memory(user_id, fact["key"], fact["value"])
+        except Exception:
+            logger.debug("Memory extraction failed for %s", user_id)
         return full_reply
 
     # -- FastAPI app with lifespan -------------------------------------------
