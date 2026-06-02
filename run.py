@@ -109,16 +109,22 @@ async def cmd_serve() -> None:
         history = await mgr.get_history(user_id)
         memory = await mgr.get_memory(user_id)
 
-        reply = await get_ai_response(content, history, memory)
+    reply = await get_ai_response(content, history, memory)
 
-        await mgr.save_turn(user_id, content, reply)
+    await mgr.save_turn(user_id, content, reply)
 
-        # Split multi-message replies on ||| separator
+    # Split multi-message replies on ||| separator.
+    # If no ||| found, fallback: split on sentence boundaries (。！？)
+    if "|||" in reply:
         parts = [p.strip() for p in reply.split("|||") if p.strip()]
-        for part in parts:
-            await send_message(base_url, token, user_id, part, context_token)
-            import asyncio as _asyncio
-            await _asyncio.sleep(0.6)  # slight delay between split messages
+    else:
+        import re
+        parts = [p.strip() for p in re.split(r"[。！？\n]+", reply) if p.strip()]
+
+    for i, part in enumerate(parts):
+        await send_message(base_url, token, user_id, part, context_token)
+        if i < len(parts) - 1:
+            await asyncio.sleep(0.8)
 
         # Extract new memories from this conversation turn
         try:
@@ -127,7 +133,7 @@ async def cmd_serve() -> None:
                 await mgr.set_memory(user_id, fact["key"], fact["value"])
         except Exception:
             logger.debug("Memory extraction failed for %s", user_id)
-        return full_reply
+        return reply
 
     # -- FastAPI app with lifespan -------------------------------------------
     @asynccontextmanager
