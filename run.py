@@ -112,7 +112,13 @@ async def cmd_serve() -> None:
         reply = await get_ai_response(content, history, memory)
 
         await mgr.save_turn(user_id, content, reply)
-        await send_message(base_url, token, user_id, reply, context_token)
+
+        # Split multi-message replies on ||| separator
+        parts = [p.strip() for p in reply.split("|||") if p.strip()]
+        for part in parts:
+            await send_message(base_url, token, user_id, part, context_token)
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.6)  # slight delay between split messages
 
         # Extract new memories from this conversation turn
         try:
