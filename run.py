@@ -109,22 +109,22 @@ async def cmd_serve() -> None:
         history = await mgr.get_history(user_id)
         memory = await mgr.get_memory(user_id)
 
-    reply = await get_ai_response(content, history, memory)
+        reply = await get_ai_response(content, history, memory)
 
-    await mgr.save_turn(user_id, content, reply)
+        await mgr.save_turn(user_id, content, reply)
 
-    # Split multi-message replies on ||| separator.
-    # If no ||| found, fallback: split on sentence boundaries (。！？)
-    if "|||" in reply:
-        parts = [p.strip() for p in reply.split("|||") if p.strip()]
-    else:
-        import re
-        parts = [p.strip() for p in re.split(r"[。！？\n]+", reply) if p.strip()]
+        # Split multi-message replies on ||| separator.
+        # If no ||| found, fallback: split on sentence boundaries (。！？)
+        if "|||" in reply:
+            parts = [p.strip() for p in reply.split("|||") if p.strip()]
+        else:
+            import re
+            parts = [p.strip() for p in re.split(r"[。！？\n]+", reply) if p.strip()]
 
-    for i, part in enumerate(parts):
-        await send_message(base_url, token, user_id, part, context_token)
-        if i < len(parts) - 1:
-            await asyncio.sleep(0.8)
+        for i, part in enumerate(parts):
+            await send_message(base_url, token, user_id, part, context_token)
+            if i < len(parts) - 1:
+                await asyncio.sleep(0.8)
 
         # Extract new memories from this conversation turn
         try:
