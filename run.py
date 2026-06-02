@@ -113,13 +113,17 @@ async def cmd_serve() -> None:
 
         await mgr.save_turn(user_id, content, reply)
 
-        # Split multi-message replies on ||| separator.
-        # If no ||| found, fallback: split on sentence boundaries (。！？)
+        # Split and clean replies:
+        # 1. Split on |||
+        # 2. Strip parenthetical stage directions like (笑)(叹气)(脸红)
+        import re
         if "|||" in reply:
             parts = [p.strip() for p in reply.split("|||") if p.strip()]
         else:
-            import re
             parts = [p.strip() for p in re.split(r"[。！？\n]+", reply) if p.strip()]
+
+        parts = [re.sub(r"[（(][^）)]*[）)]", "", p).strip() for p in parts]
+        parts = [p for p in parts if p]  # remove empty after stripping
 
         for i, part in enumerate(parts):
             await send_message(base_url, token, user_id, part, context_token)
