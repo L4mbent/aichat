@@ -23,7 +23,8 @@
       "Bash(cat /tmp/openclaw-weixin-src/package/src/auth/accounts.ts)",
       "Read(//tmp/openclaw-weixin-src/package/src/auth/**)",
       "Bash(cat /tmp/openclaw-weixin-src/package/src/channel.ts)",
-      "Read(//tmp/openclaw-weixin-src/package/src/**)"
+      "Read(//tmp/openclaw-weixin-src/package/src/**)",
+      "Bash(ssh root@39.96.198.100 \"systemctl status asuna --no-pager | head -5\")"
     ]
   }
 }
