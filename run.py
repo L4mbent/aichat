@@ -97,6 +97,11 @@ async def cmd_serve() -> None:
     stop_signal = asyncio.Event()
 
     # -- Message processor ----------------------------------------------------
+    # Per-user buffer: accumulate rapid-fire messages before replying
+    _msg_buffer: dict[str, list[str]] = {}
+    _msg_timers: dict[str, asyncio.Task | None] = {}
+    BUFFER_TIMEOUT = 3.0  # seconds to wait for more messages
+
     async def process_message(user_id: str, content: str, context_token: str) -> str:
         if not limiter.check_and_acquire(user_id):
             await send_message(
@@ -106,39 +111,61 @@ async def cmd_serve() -> None:
             )
             return ""
 
-        await mgr.get_or_create_user(user_id)
-        history = await mgr.get_history(user_id)
-        memory = await mgr.get_memory(user_id)
+        # Buffer: accumulate messages, reply after a pause
+        if user_id not in _msg_buffer:
+            _msg_buffer[user_id] = []
+        _msg_buffer[user_id].append(content)
 
-        reply = await get_ai_response(content, history, memory)
+        # Cancel previous timer
+        if user_id in _msg_timers and _msg_timers[user_id]:
+            _msg_timers[user_id].cancel()
 
-        await mgr.save_turn(user_id, content, reply)
+        # Schedule reply after BUFFER_TIMEOUT seconds of silence
+        async def _reply_after_pause():
+            await asyncio.sleep(BUFFER_TIMEOUT)
+            messages = _msg_buffer.pop(user_id, [])
+            _msg_timers.pop(user_id, None)
+            if not messages:
+                return ""
 
-        # Split and clean replies:
-        # 1. Split on |||
-        # 2. Strip parenthetical stage directions like (笑)(叹气)(脸红)
-        import re
-        if "|||" in reply:
-            parts = [p.strip() for p in reply.split("|||") if p.strip()]
-        else:
-            parts = [p.strip() for p in re.split(r"[。！？\n]+", reply) if p.strip()]
+            # Join all buffered messages into one
+            combined = "\n".join(messages)
 
-        parts = [re.sub(r"[（(][^）)]*[）)]", "", p).strip() for p in parts]
-        parts = [p for p in parts if p]  # remove empty after stripping
+            await mgr.get_or_create_user(user_id)
+            history = await mgr.get_history(user_id)
+            memory = await mgr.get_memory(user_id)
 
-        for i, part in enumerate(parts):
-            await send_message(base_url, token, user_id, part, context_token)
-            if i < len(parts) - 1:
-                await asyncio.sleep(0.8)
+            reply = await get_ai_response(combined, history, memory)
 
-        # Extract new memories from this conversation turn
-        try:
-            new_facts = await extract_memories(memory, content, reply)
-            for fact in new_facts:
-                await mgr.set_memory(user_id, fact["key"], fact["value"])
-        except Exception:
-            logger.debug("Memory extraction failed for %s", user_id)
-        return reply
+            await mgr.save_turn(user_id, combined, reply)
+
+            import re
+            if "|||" in reply:
+                parts = [p.strip() for p in reply.split("|||") if p.strip()]
+            else:
+                parts = [p.strip() for p in re.split(r"[。！？\n]+", reply) if p.strip()]
+
+            parts = [re.sub(r"[（(][^）)]*[）)]", "", p).strip() for p in parts]
+            parts = [p for p in parts if p]
+
+            for i, part in enumerate(parts):
+                await send_message(base_url, token, user_id, part, context_token)
+                if i < len(parts) - 1:
+                    await asyncio.sleep(0.8)
+
+            # Extract new memories
+            try:
+                new_facts = await extract_memories(memory, combined, reply)
+                for fact in new_facts:
+                    await mgr.set_memory(user_id, fact["key"], fact["value"])
+            except Exception:
+                logger.debug("Memory extraction failed for %s", user_id)
+
+            return reply
+
+        timer = asyncio.create_task(_reply_after_pause())
+        _msg_timers[user_id] = timer
+        return ""
 
     # -- FastAPI app with lifespan -------------------------------------------
     @asynccontextmanager
