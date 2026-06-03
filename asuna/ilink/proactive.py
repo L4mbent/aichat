@@ -22,14 +22,28 @@ PROACTIVE_PROMPT = """{time_str}
 - 再比如："刚练完剑，手酸死了。" """.strip()
 
 
-async def generate_proactive_message() -> str:
+async def generate_proactive_message(
+    user_memory: dict[str, str] | None = None,
+    recent_context: str = "",
+) -> str:
     now = datetime.now(timezone(timedelta(hours=8)))
     time_str = now.strftime("%H:%M")
+
+    prompt = PROACTIVE_PROMPT.format(time_str=time_str)
+
+    if user_memory:
+        lines = ["\n关于你要发消息的这个人，你知道："]
+        for key, value in user_memory.items():
+            lines.append(f"- {key}：{value}")
+        prompt += "\n".join(lines)
+
+    if recent_context:
+        prompt += f"\n\n你们最近的对话：\n{recent_context}\n（参考上面的对话来自然地开启话题，但不要重复对方刚说过的话）"
 
     client = get_client()
     response = await client.chat.completions.create(
         model=settings.DEEPSEEK_MODEL,
-        messages=[{"role": "user", "content": PROACTIVE_PROMPT.format(time_str=time_str)}],
+        messages=[{"role": "user", "content": prompt}],
         temperature=0.95,
         top_p=1.0,
         max_tokens=120,
@@ -41,6 +55,9 @@ async def generate_proactive_message() -> str:
 class ProactiveScheduler:
     """Sends Asuna-initiated messages at random intervals to recent users."""
 
+    # Quiet hours in CST: 0:00 – 7:00 (no proactive messages)
+    QUIET_HOURS = range(0, 7)  # hours 0 through 6
+
     def __init__(
         self,
         token: str,
@@ -51,6 +68,10 @@ class ProactiveScheduler:
         self.base_url = base_url
         self.mgr = mgr
         self._last_user_index = 0
+
+    def _is_quiet_time(self) -> bool:
+        now = datetime.now(timezone(timedelta(hours=8)))
+        return now.hour in self.QUIET_HOURS
 
     async def _get_recent_users(self) -> list[str]:
         """Get users who've chatted with Asuna recently."""
@@ -73,6 +94,10 @@ class ProactiveScheduler:
         if stop_signal.is_set():
             return
 
+        if self._is_quiet_time():
+            logger.debug("Quiet hours (0:00-7:00), skipping proactive message")
+            return
+
         users = await self._get_recent_users()
         if not users:
             logger.debug("No recent users to message proactively")
@@ -85,7 +110,19 @@ class ProactiveScheduler:
             from asuna.ilink.api import send_message
             from asuna.ilink.state import get_context_token
 
-            text = await generate_proactive_message()
+            memory = await self.mgr.get_memory(user_id)
+            history = await self.mgr.get_history(user_id)
+            recent = ""
+            if history.turns:
+                last = history.turns[-3:]  # last 3 turns for context
+                recent = "\n".join(
+                    f"裴：{t.user_msg}\nAsuna：{t.asst_reply}" for t in last
+                )
+
+            text = await generate_proactive_message(
+                user_memory=memory,
+                recent_context=recent,
+            )
             if not text or not text.strip():
                 return
 

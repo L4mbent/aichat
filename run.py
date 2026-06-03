@@ -100,7 +100,7 @@ async def cmd_serve() -> None:
     # Per-user buffer: accumulate rapid-fire messages before replying
     _msg_buffer: dict[str, list[str]] = {}
     _msg_timers: dict[str, asyncio.Task | None] = {}
-    BUFFER_TIMEOUT = 3.0  # seconds to wait for more messages
+    BUFFER_TIMEOUT = 30.0  # seconds to wait for more messages
 
     async def process_message(user_id: str, content: str, context_token: str) -> str:
         if not limiter.check_and_acquire(user_id):
