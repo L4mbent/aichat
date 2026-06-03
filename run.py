@@ -59,6 +59,7 @@ async def cmd_serve() -> None:
     from asuna.db.session import SessionManager
     from asuna.ilink.api import send_message
     from asuna.ilink.monitor import run_monitor
+    from asuna.ilink.proactive import ProactiveScheduler
     from asuna.ilink.state import load_account
     from asuna.llm.client import get_ai_response, extract_memories
     from asuna.middleware.rate_limit import RateLimiter
@@ -179,6 +180,10 @@ async def cmd_serve() -> None:
 
     monitor_task = asyncio.create_task(_run_monitor())
 
+    # -- Start proactive messaging scheduler ----------------------------------
+    proactive = ProactiveScheduler(token=token, base_url=base_url, mgr=mgr)
+    proactive_task = asyncio.create_task(proactive.run(stop_signal))
+
     # -- Start server --------------------------------------------------------
     config = uvicorn.Config(
         app,
@@ -194,8 +199,13 @@ async def cmd_serve() -> None:
     finally:
         stop_signal.set()
         monitor_task.cancel()
+        proactive_task.cancel()
         try:
             await monitor_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await proactive_task
         except asyncio.CancelledError:
             pass
 
