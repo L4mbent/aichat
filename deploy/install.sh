@@ -7,7 +7,7 @@ set -e
 # Config — CHANGE THESE to match your setup
 # =============================================================================
 DOMAIN="asuna.top"                     # Your domain (must have DNS A record pointing to this server)
-DEEPSEEK_API_KEY="sk-611327640d32489aa6e0490c02eb2faf"
+DEEPSEEK_API_KEY="your-deepseek-api-key-here"   # Set this before running
 DEEPSEEK_MODEL="deepseek-chat"
 
 # =============================================================================
