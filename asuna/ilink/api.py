@@ -4,6 +4,7 @@ Translated from @tencent-weixin/openclaw-weixin src/api/api.ts
 """
 
 import base64
+import hashlib
 import json
 import os
 import uuid
@@ -89,20 +90,28 @@ async def send_message(
     text: str,
     context_token: str = "",
     run_id: str = "",
-) -> None:
-    """Send a text message to a user."""
-    from asuna.ilink.types import MessageItem, MessageItemType, MessageState, MessageType
+    image_item: dict | None = None,
+) -> str:
+    """Send a message to a user. Returns the client_id (message ID).
+
+    When `image_item` is provided, it is sent as a standalone IMAGE message
+    (text is ignored). Otherwise, this sends a plain TEXT message.
+    """
+    from asuna.ilink.types import MessageItemType, MessageState, MessageType
 
     url = f"{base_url.rstrip('/')}/ilink/bot/sendmessage"
     headers = build_headers(token)
     client_id = generate_client_id()
 
-    item_list: list[dict] = []
-    if text:
-        item_list.append({
-            "type": MessageItemType.TEXT,
-            "text_item": {"text": text},
-        })
+    if image_item:
+        item_list = [image_item]
+    else:
+        item_list = []
+        if text:
+            item_list.append({
+                "type": MessageItemType.TEXT,
+                "text_item": {"text": text},
+            })
 
     body: dict = {
         "msg": {
@@ -122,6 +131,8 @@ async def send_message(
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=10.0)) as client:
         resp = await client.post(url, json=body, headers=headers)
         resp.raise_for_status()
+
+    return client_id
 
 
 async def send_typing(
@@ -365,4 +376,257 @@ def _parse_weixin_msg(data: dict):
         item_list=[parse_item(i) for i in data.get("item_list", [])],
         context_token=data.get("context_token", ""),
         run_id=data.get("run_id", ""),
+    )
+
+
+# ---------------------------------------------------------------------------
+# CDN Image Upload & Send
+# ---------------------------------------------------------------------------
+
+AES_BLOCK_SIZE = 16
+UPLOAD_MEDIA_TYPE_IMAGE = 1
+CDN_UPLOAD_MAX_RETRIES = 3
+
+
+def _aes_ecb_padded_size(plaintext_size: int) -> int:
+    """AES-128-ECB ciphertext size with PKCS7 padding."""
+    return ((plaintext_size + AES_BLOCK_SIZE) // AES_BLOCK_SIZE) * AES_BLOCK_SIZE
+
+
+def _aes_ecb_encrypt(plaintext: bytes, key: bytes) -> bytes:
+    """Encrypt with AES-128-ECB (PKCS7 padding).
+
+    Uses the standard library's PEP 272 interface when available.
+    Falls back to the `cryptography` package.
+    """
+    try:
+        from Crypto.Cipher import AES as PyAES
+        cipher = PyAES.new(key, PyAES.MODE_ECB)
+        # Manual PKCS7 padding
+        pad_len = AES_BLOCK_SIZE - (len(plaintext) % AES_BLOCK_SIZE)
+        padded = plaintext + bytes([pad_len] * pad_len)
+        return cipher.encrypt(padded)
+    except ImportError:
+        pass
+
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.backends import default_backend
+        backend = default_backend()
+        cipher = Cipher(algorithms.AES(key), modes.ECB(), backend=backend)
+        encryptor = cipher.encryptor()
+        # PKCS7 padding
+        pad_len = AES_BLOCK_SIZE - (len(plaintext) % AES_BLOCK_SIZE)
+        padded = plaintext + bytes([pad_len] * pad_len)
+        return encryptor.update(padded) + encryptor.finalize()
+    except ImportError:
+        raise ImportError(
+            "AES encryption requires either `pycryptodome` or `cryptography` package. "
+            "Install with: pip install pycryptodome"
+        )
+
+
+async def get_upload_url(
+    base_url: str,
+    token: str,
+    filekey: str,
+    to_user_id: str,
+    rawsize: int,
+    rawfilemd5: str,
+    filesize: int,
+    aeskey_hex: str,
+    media_type: int = UPLOAD_MEDIA_TYPE_IMAGE,
+) -> dict:
+    """Get a pre-signed CDN upload URL from the iLink API.
+
+    Returns the parsed JSON response containing upload_full_url and/or upload_param.
+    """
+    url = f"{base_url.rstrip('/')}/ilink/bot/getuploadurl"
+    headers = build_headers(token)
+    body = {
+        "filekey": filekey,
+        "media_type": media_type,
+        "to_user_id": to_user_id,
+        "rawsize": rawsize,
+        "rawfilemd5": rawfilemd5,
+        "filesize": filesize,
+        "no_need_thumb": True,
+        "aeskey": aeskey_hex,
+    }
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=10.0)) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def upload_to_cdn(
+    plaintext: bytes,
+    upload_full_url: str | None,
+    upload_param: str | None,
+    cdn_base_url: str,
+    filekey: str,
+    aeskey: bytes,
+) -> str:
+    """Upload encrypted file to the Weixin CDN.
+
+    Encrypts the plaintext with AES-128-ECB, then POSTs to the CDN.
+    Returns the download encrypted_query_param from the x-encrypted-param header.
+    Retries up to CDN_UPLOAD_MAX_RETRIES on server errors.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    ciphertext = _aes_ecb_encrypt(plaintext, aeskey)
+
+    # Determine CDN upload URL
+    trimmed_full = upload_full_url.strip() if upload_full_url else ""
+    if trimmed_full:
+        upload_url = trimmed_full
+    elif upload_param:
+        upload_url = (
+            f"{cdn_base_url.rstrip('/')}/upload"
+            f"?encrypted_query_param={upload_param}&filekey={filekey}"
+        )
+    else:
+        raise ValueError("CDN upload URL missing (need upload_full_url or upload_param)")
+
+    logger.debug("CDN POST url=%s... ciphertextSize=%d", upload_url[:80], len(ciphertext))
+    if len(ciphertext) > 1024 * 1024:
+        logger.debug("CDN POST url=%s ciphertextSize=%d", upload_url[:80], len(ciphertext))
+
+    download_param: str | None = None
+    last_error: Exception | None = None
+
+    for attempt in range(1, CDN_UPLOAD_MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+                resp = await client.post(
+                    upload_url,
+                    content=ciphertext,
+                    headers={"Content-Type": "application/octet-stream"},
+                )
+
+            if 400 <= resp.status_code < 500:
+                err_msg = resp.headers.get("x-error-message", resp.text)
+                logger.error(
+                    "CDN client error attempt=%d status=%d err=%s",
+                    attempt, resp.status_code, err_msg,
+                )
+                raise RuntimeError(f"CDN upload client error {resp.status_code}: {err_msg}")
+
+            if resp.status_code != 200:
+                err_msg = resp.headers.get("x-error-message", f"status {resp.status_code}")
+                logger.error(
+                    "CDN server error attempt=%d status=%d err=%s",
+                    attempt, resp.status_code, err_msg,
+                )
+                raise RuntimeError(f"CDN upload server error: {err_msg}")
+
+            download_param = resp.headers.get("x-encrypted-param")
+            if not download_param:
+                logger.error("CDN response missing x-encrypted-param header attempt=%d", attempt)
+                raise RuntimeError("CDN upload response missing x-encrypted-param header")
+
+            logger.debug("CDN upload success attempt=%d", attempt)
+            break
+
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt < CDN_UPLOAD_MAX_RETRIES:
+                logger.error("CDN attempt %d failed, retrying... err=%s", attempt, exc)
+            else:
+                logger.error("CDN all %d attempts failed err=%s", CDN_UPLOAD_MAX_RETRIES, exc)
+
+    if not download_param:
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"CDN upload failed after {CDN_UPLOAD_MAX_RETRIES} attempts")
+
+    return download_param
+
+
+async def send_image_message(
+    base_url: str,
+    token: str,
+    to_user_id: str,
+    image_path: str,
+    context_token: str = "",
+    cdn_base_url: str = "",
+) -> str:
+    """Upload a local image file to the Weixin CDN and send it as a message.
+
+    Full pipeline: hash → getUploadUrl → AES encrypt → CDN upload → sendMessage.
+    Returns the message client_id.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    from asuna.ilink.types import MessageItemType
+
+    # 1. Read and hash the file
+    with open(image_path, "rb") as f:
+        plaintext = f.read()
+
+    rawsize = len(plaintext)
+    rawfilemd5 = hashlib.md5(plaintext).hexdigest()
+    filesize = _aes_ecb_padded_size(rawsize)
+    filekey = os.urandom(16).hex()
+    aeskey = os.urandom(16)
+    aeskey_hex = aeskey.hex()
+
+    logger.debug(
+        "send_image_message: %s rawsize=%d filesize=%d md5=%s filekey=%s",
+        image_path, rawsize, filesize, rawfilemd5, filekey,
+    )
+
+    # 2. Get pre-signed CDN upload URL
+    upload_resp = await get_upload_url(
+        base_url=base_url,
+        token=token,
+        filekey=filekey,
+        to_user_id=to_user_id,
+        rawsize=rawsize,
+        rawfilemd5=rawfilemd5,
+        filesize=filesize,
+        aeskey_hex=aeskey_hex,
+    )
+
+    # 3. Upload to CDN (encrypts internally)
+    if not cdn_base_url:
+        cdn_base_url = base_url
+
+    download_param = await upload_to_cdn(
+        plaintext=plaintext,
+        upload_full_url=upload_resp.get("upload_full_url", ""),
+        upload_param=upload_resp.get("upload_param", ""),
+        cdn_base_url=cdn_base_url,
+        filekey=filekey,
+        aeskey=aeskey,
+    )
+
+    # 4. Build IMAGE MessageItem and send
+    import base64 as b64
+    image_item = {
+        "type": MessageItemType.IMAGE,
+        "image_item": {
+            "media": {
+                "encrypt_query_param": download_param,
+                "aes_key": b64.b64encode(aeskey).decode(),
+                "encrypt_type": 1,
+            },
+            "mid_size": filesize,
+        },
+    }
+
+    logger.info("send_image_message: sending to %s file=%s", to_user_id[:20], image_path)
+    return await send_message(
+        base_url=base_url,
+        token=token,
+        to_user_id=to_user_id,
+        text="",
+        context_token=context_token,
+        image_item=image_item,
     )

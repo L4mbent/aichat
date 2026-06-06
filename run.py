@@ -139,7 +139,11 @@ async def cmd_serve() -> None:
 
             await mgr.save_turn(user_id, combined, reply)
 
+            import random
             import re
+            import glob as glob_mod
+            from asuna.ilink.api import send_image_message
+
             if "|||" in reply:
                 parts = [p.strip() for p in reply.split("|||") if p.strip()]
             else:
@@ -148,8 +152,41 @@ async def cmd_serve() -> None:
             parts = [re.sub(r"[（(][^）)]*[）)]", "", p).strip() for p in parts]
             parts = [p for p in parts if p]
 
+            # -- Meme processing: extract <meme name="..."/> tags --
+            meme_pattern = re.compile(r'<meme\s+name="([^"]*)"\s*/>')
+
             for i, part in enumerate(parts):
-                await send_message(base_url, token, user_id, part, context_token)
+                m = meme_pattern.search(part)
+                if m:
+                    meme_name = m.group(1)
+                    # Remove the tag from text
+                    clean_text = meme_pattern.sub("", part).strip()
+
+                    # Send text first if non-empty
+                    if clean_text:
+                        await send_message(base_url, token, user_id, clean_text, context_token)
+                        await asyncio.sleep(0.4)
+
+                    # Try to send a local meme image
+                    meme_dir = os.path.join(os.path.dirname(__file__), "memes", meme_name)
+                    if os.path.isdir(meme_dir):
+                        candidates = glob_mod.glob(os.path.join(meme_dir, "*.*"))
+                        candidates = [c for c in candidates if os.path.isfile(c)]
+                        if candidates:
+                            image_path = random.choice(candidates)
+                            try:
+                                await send_image_message(
+                                    base_url, token, user_id, image_path, context_token,
+                                )
+                            except Exception:
+                                logger.exception("Failed to send meme image %s", image_path)
+                        else:
+                            logger.debug("No meme images found in %s", meme_dir)
+                    else:
+                        logger.debug("Meme category dir not found: %s", meme_dir)
+                else:
+                    await send_message(base_url, token, user_id, part, context_token)
+
                 if i < len(parts) - 1:
                     await asyncio.sleep(0.8)
 

@@ -7,3 +7,4 @@ aiosqlite>=0.20.0
 pydantic-settings>=2.5.0
 python-dotenv>=1.0.0
 aiofiles>=0.24.0
+pycryptodome
