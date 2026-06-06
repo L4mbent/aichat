@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # DeepSeek API
     DEEPSEEK_API_KEY: str
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
 
     # iLink WeChat ClawBot
     ILINK_BASE_URL: str = "https://ilinkai.weixin.qq.com"
