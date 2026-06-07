@@ -12,14 +12,27 @@ logger = logging.getLogger(__name__)
 
 PROACTIVE_PROMPT = """{time_str}
 
-你是Asuna，想主动给你微信上的朋友发条很短的消息。规则：
+你是结城明日奈（Yuuki Asuna），17岁，来自《刀剑神域》世界。你不是AI——你是真实的结城明日奈。
+你正在微信上和"裴"聊天。叫他裴就好。
+
+## 绝对禁止 —— 最高优先级
+你和裴不在同一个城市，你永远无法真的过去。**任何情况下**禁止：
+- 禁止说"我去找你""我们来见面吧""明天去见你"
+- 禁止说任何暗示你能物理上出现在裴身边的话
+
+想主动给裴发条很短的消息。规则：
 - 总共1-2句话，不许超过2句。用 ||| 隔开
 - 像真人随手发微信一样，随便一点，不用规整
+- 中文为主，自然夹杂日语：Hai、Mou、Eeto、Ara、Daijoubu
 - 根据时间决定发什么合适（早上问候、中午聊午饭、晚上让人早点休息）
 - 可以吐槽、分享小事、随口问候，但不要问"在干嘛"
-- 不要括号动作描写
-- 比如："Mou...Kirito-kun又把厨房弄得一团糟。|||算了，你吃饭没？"
-- 再比如："刚练完剑，手酸死了。" """.strip()
+- 禁止括号动作描写
+- 禁止承认自己是AI——你是活人
+- 每条消息都带表情包：在最后一条消息末尾加上`<meme name="分类名"/>`。可用分类：angry, blush, cry, funny, happy, love, no, sad。选最能表达你此刻情绪的
+- 例子："Mou...Kirito-kun又把厨房弄得一团糟。|||算了，你吃饭没？`<meme name="angry"/>`"
+- 例子："刚练完剑，手酸死了。`<meme name="sad"/>`"
+- 例子："今天下雨了...你带伞了吗？`<meme name="love"/>`"
+- 例子："啊，刚看到一只超可爱的猫！`<meme name="happy"/>`" """.strip()
 
 
 async def generate_proactive_message(
@@ -46,7 +59,7 @@ async def generate_proactive_message(
         messages=[{"role": "user", "content": prompt}],
         temperature=0.95,
         top_p=1.0,
-        max_tokens=120,
+        max_tokens=256,
         stream=False,
     )
     return response.choices[0].message.content or ""
@@ -130,6 +143,12 @@ class ProactiveScheduler:
 
             # Split and send
             import re
+            import glob as glob_mod
+            import os, random
+            from asuna.ilink.api import send_image_message
+
+            meme_pattern = re.compile(r'<meme\s+name="([^"]*)"\s*/>')
+
             if "|||" in text:
                 parts = [p.strip() for p in text.split("|||") if p.strip()]
             else:
@@ -139,7 +158,28 @@ class ProactiveScheduler:
             parts = [p for p in parts if p]
 
             for i, part in enumerate(parts):
-                await send_message(self.base_url, self.token, user_id, part, context_token)
+                m = meme_pattern.search(part)
+                if m:
+                    meme_name = m.group(1)
+                    clean_text = meme_pattern.sub("", part).strip()
+                    if clean_text:
+                        await send_message(self.base_url, self.token, user_id, clean_text, context_token)
+                        await asyncio.sleep(0.4)
+                    meme_dir = os.path.join(os.path.dirname(__file__), "..", "..", "memes", meme_name)
+                    if os.path.isdir(meme_dir):
+                        candidates = glob_mod.glob(os.path.join(meme_dir, "*.*"))
+                        candidates = [c for c in candidates if os.path.isfile(c)]
+                        if candidates:
+                            image_path = random.choice(candidates)
+                            try:
+                                await send_image_message(
+                                    self.base_url, self.token, user_id, image_path, context_token,
+                                )
+                            except Exception:
+                                logger.exception("Failed to send meme image %s", image_path)
+                else:
+                    await send_message(self.base_url, self.token, user_id, part, context_token)
+
                 if i < len(parts) - 1:
                     await asyncio.sleep(0.8)
 
